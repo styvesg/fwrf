@@ -24,7 +24,7 @@ def get_layer(net, name):
         if l.name == name:
             return i,l
         
-def PrintLasagneNet(_net, skipnoparam=True):
+def print_lasagne_network(_net, skipnoparam=True):
     layers = L.get_all_layers(_net)
     for l in layers:
         out = l.output_shape
@@ -38,6 +38,24 @@ def PrintLasagneNet(_net, skipnoparam=True):
             for p in par:
                 print "        |-- {:<10}: {:}".format(p.name, p.get_value().shape,)
         print "\n"
+        
+def validate_parameters(_net, param_list):
+    param_name = L.get_all_params(_net)
+    value_list = L.get_all_param_values(_net)
+    assert len(value_list)==len(param_list)
+    err = 0
+    for i in range(len(value_list)):
+        if value_list[i].shape==param_list[i].shape:
+            print GREEN+ "Param %d: %s = %s" % (i, param_name[i], value_list[i].shape) + END
+        else:
+            print RED  + "Param %d: %s = %s != %s" % (i, param_name[i], value_list[i].shape, param_list[i].shape) + END
+            err += 1
+    if err==0:
+        print GREEN+"Valid parameters"+END
+        return 0
+    else:
+        print RED+"%d parameter mismatch" % err + END
+        return err
         
         
 # layer shortcuts        

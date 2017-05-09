@@ -164,24 +164,24 @@ def pRF(fwrf_weights, fmap_rf, pool_rf):
 
 def create_shared_batched_feature_maps_gaussian_weights(fmap_sizes, batch_v, batch_t, verbose=True):
     nf = 0
-    _sRFWs = []
+    _smsts = []
     mem_approx = 0
     rep_approx = 0
     for i,a in enumerate(fmap_sizes):
         nf += a[1]
         n_pix = a[2]
         assert n_pix==a[3], "Non square feature map not supported"
-        _sRFWs += [theano.shared(np.zeros(shape=(batch_v, batch_t, n_pix, n_pix), dtype=fpX)),]
+        _smsts += [theano.shared(np.zeros(shape=(batch_v, batch_t, n_pix, n_pix), dtype=fpX)),]
         mem_approx += 4*batch_v*batch_t*n_pix**2
         rep_approx += 4*a[1]*n_pix**2
         if verbose:
-            print "> rfw %d with shape %s" % (i, (batch_v, batch_t, n_pix, n_pix))
+            print "> feature map candidates %d with shape %s" % (i, (batch_v, batch_t, n_pix, n_pix))
     if verbose:        
         print "  total number of feature maps = %d, in %d layers" % (nf, len(fmap_sizes))
-        print "  shared rfw using approx %.1f Mb of memory (VRAM and RAM)" % (fpX(mem_approx) /(1024*1024))
-    return _sRFWs, nf
+        print "  feature map candidate using approx %.1f Mb of memory (VRAM and RAM)" % (fpX(mem_approx) /(1024*1024))
+    return _smsts, nf
 
-def set_shared_batched_feature_maps_gaussian_weights(_psRFWs, xs, ys, ss, size=20.):
+def set_shared_batched_feature_maps_gaussian_weights(_psmsts, xs, ys, ss, size=20.):
     '''
     The interpretation of receptive field weight factor is that they correspond, for each voxel, to the probability of this voxel of seeing 
     (through the weighted average) a given feature map pixel through its receptive field size and position in visual space. 
@@ -189,13 +189,13 @@ def set_shared_batched_feature_maps_gaussian_weights(_psRFWs, xs, ys, ss, size=2
     '''
     nf = 0
     (nv, nt) = (len(xs), 1) if xs.ndim==1 else xs.shape[0:2]
-    (sv, st) = _psRFWs[0].get_value().shape[0:2]
+    (sv, st) = _psmsts[0].get_value().shape[0:2]
     assert nv==sv and nt==st, "non conformal (%d,%d)!=(%d,%d)" % (nv, nt, sv, st)
-    for a in _psRFWs:
+    for a in _psmsts:
         n_pix = a.get_value().shape[2]
-        _,_,rfw = pnu.make_gaussian_mass_stack(xs.flatten(), ys.flatten(), ss.flatten(), n_pix, size=size, dtype=fpX)
-        a.set_value(rfw.reshape((nv, nt, n_pix, n_pix)))
-    return _psRFWs
+        _,_,mst = pnu.make_gaussian_mass_stack(xs.flatten(), ys.flatten(), ss.flatten(), n_pix, size=size, dtype=fpX)
+        a.set_value(mst.reshape((nv, nt, n_pix, n_pix)))
+    return _psmsts
     
 def set_shared_parameters(shared_vars, values):
     for i,var in enumerate(shared_vars):
@@ -234,6 +234,9 @@ class pvFWRFLayer(L.Layer):
     def get_output_shape_for(self, input_shape):
         return (input_shape[0], self.nv, self.nt)
     
+
+
+
 class svFWRFLayer(L.Layer):
     '''
     svFWRFLayer is a new lasagne layer for 'shared voxel (sv)' candidate receptive field models. It assumes an input
@@ -265,23 +268,31 @@ class svFWRFLayer(L.Layer):
 
 
 
-def RFW_data(__fmaps, __sRFWs): 
+def mst_data(__fmaps, __smsts): 
     '''Apply a tentative fwrf model of the classification network intermediary representations.
     _fmaps is a list of grouped feature maps at different resolutions. F maps in total.
-    _sRFWs is a matching resolution stack of batch_t RF model candidates.
+    _smsts is a matching resolution stack of batch_t RF model candidates.
     returns a symbolic tensor of receptive field candiate weighted feature maps (bn, features, bv, bt)'''
-    __rfwfmaps = [T.tensordot(_fm, __sRFWs[i], [[2,3], [2,3]])  for i,_fm in enumerate(__fmaps)]
-    __rfw_data = T.concatenate(__rfwfmaps, axis=1)
-    return __rfw_data
+    __mstfmaps = [T.tensordot(_fm, __smsts[i], [[2,3], [2,3]])  for i,_fm in enumerate(__fmaps)]
+    __mst_data = T.concatenate(__mstfmaps, axis=1)
+    return __mst_data
 
 
+def normalize_mst_data(__mst_data, avg, std):
+    _sAvg = theano.shared(avg.T.astype(fpX)[np.newaxis,:,:,np.newaxis])
+    _sStd = theano.shared(std.T.astype(fpX)[np.newaxis,:,:,np.newaxis])
+    ### set the broadcastability of the sample axis
+    _sAvg = T.patternbroadcast(_sAvg, (True, False, False, False))
+    _sStd = T.patternbroadcast(_sStd, (True, False, False, False))
+    return (__mst_data - _sAvg) / _sStd
 
-def pvFWRF(__rfw_data, nf, nv, nt): 
+
+def pvFWRF(__mst_data, nf, nv, nt): 
     '''
     Create a symbolic lasagne network for the per voxel candidate case.
     returns a symbolic outpuy of shape (bn, bv, bt).
     '''
-    _input = L.InputLayer((None, nf, nv, nt), input_var=__rfw_data.reshape((-1,nf,nv,nt)))
+    _input = L.InputLayer((None, nf, nv, nt), input_var=__mst_data.reshape((-1,nf,nv,nt)))
     ## try to add a parametrized local nonlinearity layer.
     _pred  = pvFWRFLayer(_input, W=I.Normal(0.02), b=I.Constant(0.), nonlinearity=None)
     #print "> input using approx %.1f x batch_size Mb of memory (VRAM and RAM)" % (fpX(4*nf*nv*nt) /(1024*1024))
@@ -289,12 +300,12 @@ def pvFWRF(__rfw_data, nf, nv, nt):
     return _pred
 
 
-def svFWRF(__rfw_data, nf, nv, nt): 
+def svFWRF(__mst_data, nf, nv, nt): 
     '''
     Create a symbolic lasagne network for the shared voxel candidate case.
     returns a symbolic outpuy of shape (bn, bv, bt).
     '''
-    _input = L.InputLayer((None, nf, nt), input_var=__rfw_data.reshape((-1,nf,nt)))
+    _input = L.InputLayer((None, nf, nt), input_var=__mst_data.reshape((-1,nf,nt)))
     _pred  = svFWRFLayer(_input, nvoxels=nv, W=I.Normal(0.02), b=I.Constant(0.), nonlinearity=None) #NL.tanh
     #print "> input using approx %.1f x batch_size Mb of memory (VRAM and RAM)" % (fpX(4*nf*nv*nt) /(1024*1024))
     #print "> output using approx %.3f x batch_size Mb of memory (VRAM and RAM)" % (fpX(4*nv*nt) /(1024*1024))
@@ -339,13 +350,15 @@ class FWRF_model(object):
         self.batch_n_p, self.batch_t_p = batches_p
         self.batch_n_o, self.batch_v_o, self.batch_t_o = batches_o
         self.batch_n_t, self.batch_v_t = batches_t
-        
+        self.mst_avg = None
+        self.mst_std = None
+    
         print 'CREATING SYMBOLS\n'
-        self._sRFWs_o, self.nf = create_shared_batched_feature_maps_gaussian_weights(featureMapSizes, 1, self.batch_t_p, verbose=verbose)
-        self._sRFWs_t,_        = create_shared_batched_feature_maps_gaussian_weights(featureMapSizes, self.batch_v_t, 1, verbose=False)
+        self._smsts_o, self.nf = create_shared_batched_feature_maps_gaussian_weights(featureMapSizes, 1, self.batch_t_p, verbose=verbose)
+        self._smsts_t,_        = create_shared_batched_feature_maps_gaussian_weights(featureMapSizes, self.batch_v_t, 1, verbose=False)
         #alias self.numFeatures = self.nf       
-        _rfw_data_o = RFW_data(_symbolicFeatureMaps, self._sRFWs_o)
-        _fwrf_t = pvFWRF(RFW_data(_symbolicFeatureMaps, self._sRFWs_t), self.nf, self.batch_v_t, 1)     
+        _mst_data_o = mst_data(_symbolicFeatureMaps, self._smsts_o)
+        _fwrf_t = pvFWRF(mst_data(_symbolicFeatureMaps, self._smsts_t), self.nf, self.batch_v_t, 1)     
         
         _V  = T.matrix()
         __V = _V.dimshuffle((0,1,'x'))
@@ -361,23 +374,23 @@ class FWRF_model(object):
         _fwrf_t_val_cc = ((_fwrf_t_val_pred - _fwrf_t_val_pred.mean(axis=0, keepdims=True)) * (__V - __V.mean(axis=0, keepdims=True))).mean(axis=0) / \
             T.sqrt(T.sqr(_fwrf_t_val_pred - _fwrf_t_val_pred.mean(axis=0, keepdims=True)).mean(axis=0) * T.sqr(__V - __V.mean(axis=0, keepdims=True)).mean(axis=0)) 
         ###  
-        _rfw_data_f = T.tensor4()
-        _fwrf_f = pvFWRF(_rfw_data_f, self.nf, self.batch_v_t, 1)   
+        _mst_data_f = T.tensor4()
+        _fwrf_f = pvFWRF(_mst_data_f, self.nf, self.batch_v_t, 1)   
         self.fwrf_f_params = L.get_all_params(_fwrf_f, trainable=True)
         
         _fwrf_f_val_pred = L.get_output(_fwrf_f, deterministic=True)   
         _fwrf_f_val_cc = ((_fwrf_f_val_pred - _fwrf_f_val_pred.mean(axis=0, keepdims=True)) * (__V - __V.mean(axis=0, keepdims=True))).mean(axis=0) / \
             T.sqrt(T.sqr(_fwrf_f_val_pred - _fwrf_f_val_pred.mean(axis=0, keepdims=True)).mean(axis=0) * T.sqr(__V - __V.mean(axis=0, keepdims=True)).mean(axis=0))         
         ###
-        self.__rfw_sdata = theano.shared(np.asarray([], dtype=fpX).reshape((0,0,0,0)))
+        self.__mst_sdata = theano.shared(np.asarray([], dtype=fpX).reshape((0,0,0,0)))
         self.__vox_sdata = theano.shared(np.asarray([], dtype=fpX).reshape((0,0)))
         self.__range = T.ivector()
 
-        _srfw_batch = self.__rfw_sdata[self.__range[0]:self.__range[1]]
-        _fwrf_o = svFWRF(_srfw_batch, self.nf, self.batch_v_o, self.batch_t_o)
+        _smst_batch = self.__mst_sdata[self.__range[0]:self.__range[1]]
+        _fwrf_o = svFWRF(_smst_batch, self.nf, self.batch_v_o, self.batch_t_o)
         if verbose:
             print "\n"
-            plu.PrintLasagneNet(_fwrf_o, skipnoparam=False)
+            plu.print_lasagne_network(_fwrf_o, skipnoparam=False)
 
         ### define and compile the training expressions.       
         _fwrf_o_reg = self.__l2 * R.regularize_layer_params(_fwrf_o, R.l2)
@@ -399,13 +412,13 @@ class FWRF_model(object):
         sys.stdout.flush()
         comp_t = time.time()
         # first the expression for the precomputing
-        self.rfw_o_data_fn  = theano.function(_symbolicInputVars, _rfw_data_o)
+        self.mst_o_data_fn  = theano.function(_symbolicInputVars, _mst_data_o)
         # then the expressions for testing
         self.fwrf_t_pred_fn = theano.function(_symbolicInputVars, _fwrf_t_val_pred)
         self.fwrf_t_test_fn = theano.function(_symbolicInputVars+[_V], [_fwrf_t_val_pred, _fwrf_t_val_cc])
         #
-        self.fwrf_f_pred_fn = theano.function([_rfw_data_f], _fwrf_f_val_pred)
-        self.fwrf_f_test_fn = theano.function([_rfw_data_f, _V], [_fwrf_f_val_pred, _fwrf_f_val_cc])        
+        self.fwrf_f_pred_fn = theano.function([_mst_data_f], _fwrf_f_val_pred)
+        self.fwrf_f_test_fn = theano.function([_mst_data_f, _V], [_fwrf_f_val_pred, _fwrf_f_val_cc])        
         # finally the batched optimization expressions
         self.fwrf_o_trn_fn = theano.function([self.__range], updates=self.__fwrf_o_updates)
         self.fwrf_o_val_fn = theano.function([self.__range], _fwrf_o_val_preloss)
@@ -422,7 +435,7 @@ class FWRF_model(object):
 
 
 
-    def __precompute_rfw_o_data(self, datas, sharedModel_specs, verbose=True, dry_run=False, nonlinearity=None, zscore=False, trn_size=None, epsilon=1.0):  
+    def __precompute_mst_o_data(self, datas, sharedModel_specs, verbose=True, dry_run=False, nonlinearity=None, zscore=False, trn_size=None, epsilon=1.0):  
         n = len(datas[0])
         bn, bt = self.batch_n_p, self.batch_t_p
         vm = np.asarray(sharedModel_specs[0])
@@ -430,55 +443,61 @@ class FWRF_model(object):
         #rx, ry, rs = [sms(vm[i,0], vm[i,1]) for i,sms in enumerate(sharedModel_specs[1])]
         mx, my, ms = self.svModelSpace(sharedModel_specs)
         if verbose:
-            print "\n>> Storing the full precomputed candidate feature time series will require approx %.03fGb of RAM!"\
-                % (fpX(n*self.nf*nt*4) / 1024**3)
+            print "\n>> Storing the full modelspace tensor will require approx %.03fGb of RAM!" % (fpX(n*self.nf*nt*4) / 1024**3)
             print ">> Will be divided in chunks of %.03fGb of VRAM!" % ((fpX(n*self.nf*self.batch_t_o*4) / 1024**3))
             sys.stdout.flush()  
         start_time = time.time()
-        print "\nPrecomputing rfw candidate responses..."
+        print "\nPrecomputing mst candidate responses..."
         sys.stdout.flush()
         nbt = nt // bt
         rbt = nt - nbt * bt
         assert rbt==0, "the candidate batch size must be an exact divisor of the total number of candidates"
-        rfw_data = np.ndarray(shape=(n,self.nf,1,nt), dtype=fpX)
+        mst_data = np.ndarray(shape=(n,self.nf,1,nt), dtype=fpX)
         if dry_run:
-            return rfw_data
+            return mst_data
         for t in tqdm(range(nbt)): ## CANDIDATE BATCH LOOP     
             # set the receptive field weight for this batch of voxelmodel
-            set_shared_batched_feature_maps_gaussian_weights(self._sRFWs_o, mx[:,t*bt:(t+1)*bt], my[:,t*bt:(t+1)*bt], ms[:,t*bt:(t+1)*bt], size=self.view_angle)
+            set_shared_batched_feature_maps_gaussian_weights(self._smsts_o, mx[:,t*bt:(t+1)*bt], my[:,t*bt:(t+1)*bt], ms[:,t*bt:(t+1)*bt], size=self.view_angle)
             for excerpt, size in iterate_slice(0, n, bn):
                 args = slice_arraylist(datas, excerpt)  
-                rfw_data[excerpt,:,:,t*bt:(t+1)*bt] = self.rfw_o_data_fn(*args)
+                mst_data[excerpt,:,:,t*bt:(t+1)*bt] = self.mst_o_data_fn(*args)
         full_time = time.time() - start_time
-        print "%d rfw candidate responses took %.3fs @ %.3f models/s" % (nt, full_time, fpX(nt)/full_time)
+        print "%d mst candidate responses took %.3fs @ %.3f models/s" % (nt, full_time, fpX(nt)/full_time)
         if nonlinearity:
             print "Applying nonlinearity to modelspace tensor..."
             sys.stdout.flush()
-            for rr, rl in tqdm(iterate_slice(0, rfw_data.shape[3], bt)): 
-                rfw_data[:,:,:,rr] = nonlinearity(rfw_data[:,:,:,rr])
+            for rr, rl in tqdm(iterate_slice(0, mst_data.shape[3], bt)): 
+                mst_data[:,:,:,rr] = nonlinearity(mst_data[:,:,:,rr])
         if zscore:
             if trn_size==None:
-                trn_size = len(rfw_data)
+                trn_size = len(mst_data)
             print "Z-scoring modelspace tensor..."
-            sys.stdout.flush()
-            for rr, rl in tqdm(iterate_slice(0, rfw_data.shape[3], bt)):   
-                rfw_avg = np.mean(rfw_data[:trn_size,:,:,rr], axis=0, dtype=np.float64, keepdims=True).astype(fpX)
-                rfw_std = np.std(rfw_data[:trn_size,:,:,rr], axis=0, dtype=np.float64, keepdims=True).astype(fpX)
-                rfw_data[:,:,:,rr] -= rfw_avg
-                rfw_data[:,:,:,rr] /= (epsilon + rfw_std)
-                rfw_data[:,:,:,rr] = np.nan_to_num(rfw_data[:,:,:,rr])
-        #if np.isnan(rfw_data).any():
-        #    print "There are NaNs values in the modelspace tensor! Replacing with 0."
-        #    rfw_data = np.nan_to_num(rfw_data)
-        return rfw_data
+            if self.mst_avg is not None:
+                print "Using stored z-scoring values."
+                sys.stdout.flush()
+                for rr, rl in tqdm(iterate_slice(0, mst_data.shape[3], bt)):   
+                    mst_data[:,:,:,rr] -= self.mst_avg[:,:,:,rr]
+                    mst_data[:,:,:,rr] /= self.mst_std[:,:,:,rr]
+                    mst_data[:,:,:,rr] = np.nan_to_num(mst_data[:,:,:,rr])                
+            else: # calculate the z-score stat the first time around.
+                self.mst_avg = np.ndarray(shape=(1,)+mst_data.shape[1:], dtype=fpX)
+                self.mst_std = np.ndarray(shape=(1,)+mst_data.shape[1:], dtype=fpX)
+                sys.stdout.flush()
+                for rr, rl in tqdm(iterate_slice(0, mst_data.shape[3], bt)):   
+                    self.mst_avg[0,:,:,rr] = np.mean(mst_data[:trn_size,:,:,rr], axis=0, dtype=np.float64).astype(fpX)
+                    self.mst_std[0,:,:,rr] =  np.std(mst_data[:trn_size,:,:,rr], axis=0, dtype=np.float64).astype(fpX) + fpX(epsilon)
+                    mst_data[:,:,:,rr] -= self.mst_avg[:,:,:,rr]
+                    mst_data[:,:,:,rr] /= self.mst_std[:,:,:,rr]
+                    mst_data[:,:,:,rr] = np.nan_to_num(mst_data[:,:,:,rr])
+        return mst_data
    
 
     
 
-    def __optimize_shared_models(self, rfw_data, voxels, params, val_test_size=100, num_epochs=1, output_val_scores=True, verbose=True, dry_run=False):
+    def __optimize_shared_models(self, mst_data, voxels, params, val_test_size=100, num_epochs=1, output_val_scores=True, verbose=True, dry_run=False):
         bn, bv, bt = self.batch_n_o, self.batch_v_o, self.batch_t_o
         n, nv = voxels.shape
-        nt = rfw_data.shape[3]
+        nt = mst_data.shape[3]
         
         val_scores = []
         if output_val_scores:
@@ -521,7 +540,7 @@ class FWRF_model(object):
                 # need to recompile to reset the solver!!! (depending on the solver used)
                 self.fwrf_o_trn_fn = theano.function([self.__range], updates=self.__fwrf_o_updates)
                 # set the shared parameter values for this candidates. Every candidate restart at the same point.
-                set_shared_parameters(self.fwrf_o_params+[self.__rfw_sdata], [pW, pb, rfw_data[:,:,:,t*bt:(t+1)*bt]])
+                set_shared_parameters(self.fwrf_o_params+[self.__mst_sdata], [pW, pb, mst_data[:,:,:,t*bt:(t+1)*bt]])
                 print "\n  Voxel %d:%d of %d, Candidate %d:%d of %d" % (rv[0], rv[-1]+1, nv, t*bt, (t+1)*bt, nt)
                 ### epoch loop
                 epoch_start = time.time()
@@ -548,9 +567,7 @@ class FWRF_model(object):
                     best_scores_for_this_epoch = np.amin(val_batch_scores[:lv,:], axis=1)
                     # This updates the BEST RELATIVE MODELS, along with their associated scores 
                     best_scores_mask = (best_scores_for_this_epoch<best_scores_slice) #all the voxels that show an improvement
-#                    if np.sum(best_scores_mask)==0:
-#                        print "    end of improvement"
-#                        break
+
                     np.copyto(best_scores_slice, best_scores_for_this_epoch, casting='same_kind', where=best_scores_mask)      
                     np.copyto(best_models_slice, best_models_for_this_epoch + t*bt, casting='same_kind', where=best_scores_mask) #notice the +t*bt to return the best model across all models, not just the batch's
                     #to select the weight slices we need, we need to specify the voxels that showed improvement AND the models that correspond to these improvements.
@@ -573,27 +590,40 @@ class FWRF_model(object):
 
 
     
-    def precompute_rfw_data(self, datas, sharedModel_specs, verbose=False, dry_run=False, nonlinearity=None, zscore=False, trn_size=None, epsilon=1.0):
-        return self.__precompute_rfw_o_data(datas, sharedModel_specs, verbose=verbose, dry_run=dry_run, nonlinearity=nonlinearity, zscore=zscore, trn_size=trn_size, epsilon=epsilon) 
+    def precompute_mst_data(self, datas, sharedModel_specs, verbose=False, dry_run=False, nonlinearity=None, zscore=False, trn_size=None, epsilon=1.0):
+        return self.__precompute_mst_o_data(datas, sharedModel_specs, verbose=verbose, dry_run=dry_run, nonlinearity=nonlinearity, zscore=zscore, trn_size=trn_size, epsilon=epsilon) 
         
         
 
-    def shared_model_training(self, datas, voxels, sharedModel_specs, params, val_test_size=100, lr=1e-4, l2=0.0, num_epochs=1, output_val_scores=True, verbose=True, dry_run=False, use_data_as_rfw_data=False):
+    def shared_model_training(self, mst_data, voxels, sharedModel_specs, params, val_test_size=100, lr=1e-4, l2=0.0, num_epochs=1, output_val_scores=True, verbose=True, dry_run=False):
         ''' 
         Train the specified models
+        
+        Arguments:
+        
+        Returns:
+        val_scores:
+        best_scores:
+        best_abs_models:
+        best_rel_models:
+        best_params:
+        best_mst_data_avg:
+        best_mst_data_std:
         '''  
+        assert len(mst_data)==len(voxels), "data/target length mismatch"    
         n, nv = voxels.shape
         vm = np.asarray(sharedModel_specs[0])
         nt = np.prod([sms.length for sms in sharedModel_specs[1]])           
         rx, ry, rs = [sms(vm[i,0], vm[i,1]) for i,sms in enumerate(sharedModel_specs[1])] # needed to map rf's back to visual space
-        if use_data_as_rfw_data:
-            assert len(datas)==len(voxels), "data/target length mismatch"   
-            rfw_data = datas
-        else:
-            assert len(datas[0])==len(voxels), "data/target length mismatch"   
-            rfw_data = self.__precompute_rfw_o_data(datas, sharedModel_specs, verbose=verbose, dry_run=dry_run) #(n, nf, 1, nt)
+               
+        ### shuffle the time series of voxels and mst_data
+        order = np.arange(n, dtype=int)
+        np.random.shuffle(order)
+        mst_data = mst_data[order]
+        voxels = voxels[order]        
+        
         ### request shared memory
-        self.__rfw_sdata.set_value(np.zeros(shape=(n, self.nf, 1, self.batch_t_o), dtype=fpX))
+        self.__mst_sdata.set_value(np.zeros(shape=(n, self.nf, 1, self.batch_t_o), dtype=fpX))
         self.__vox_sdata.set_value(np.zeros(shape=(n, self.batch_v_o), dtype=fpX))   
         self.__lr.set_value(fpX(lr))
         self.__l2.set_value(fpX(l2))        
@@ -602,11 +632,11 @@ class FWRF_model(object):
         print "\nVoxel-Candidates model optimization..."
         start_time = time.time()
         val_scores, best_scores, best_rel_models, best_params = self.__optimize_shared_models(\
-            rfw_data, voxels, params, val_test_size=val_test_size,\
+            mst_data, voxels, params, val_test_size=val_test_size,\
             num_epochs=num_epochs, output_val_scores=output_val_scores, verbose=verbose, dry_run=dry_run)  
         
         # free shared vram
-        self.__rfw_sdata.set_value(np.asarray([], dtype=fpX).reshape((0,0,0,0)))
+        self.__mst_sdata.set_value(np.asarray([], dtype=fpX).reshape((0,0,0,0)))
         self.__vox_sdata.set_value(np.asarray([], dtype=fpX).reshape((0,0)))
 
         best_abs_models = rel_to_abs_shared_models(best_rel_models, rx, ry, rs) ### put back the models in absolute coordinate a.k.a model spec for the next iteration
@@ -615,16 +645,38 @@ class FWRF_model(object):
         print "\n---------------------------------------------------------------------"
         print "%d Epoch for %d voxelmodels took %.3fs @ %.3f voxelmodels/s" % (num_epochs, nv*nt, full_time, fpX(nv*nt)/full_time)
 
-        return val_scores, best_scores, best_abs_models, best_rel_models, best_params
+        best_mst_data_avg = None
+        best_mst_data_std = None
+        if self.mst_avg is not None:
+            best_mst_data_avg = np.ndarray(shape=(nv, self.mst_avg.shape[1]), dtype=fpX)
+            best_mst_data_std = np.ndarray(shape=(nv, self.mst_std.shape[1]), dtype=fpX)
+            for v in range(nv):
+                best_mst_data_avg[v,:] = self.mst_avg[0,:,0,best_rel_models[v]]
+                best_mst_data_std[v,:] = self.mst_std[0,:,0,best_rel_models[v]]
+
+        return val_scores, best_scores, best_abs_models, best_rel_models, best_params, best_mst_data_avg, best_mst_data_std
     
 
 
 
-    def validate_models(self, datas, voxels, voxelmodels, params, use_data_as_rfw_data=False):
+    def validate_models(self, mst_data, voxels, mst_rel_models, params):
+        '''
+        Arguments:
+        mst_data: The modelspace tensor of the validation set.
+        voxels: The corresponding expected voxel response for the validation set.
+        mst_rel_models: The relative model that have been selected through training.
+        params: The trained parameter values of the model.
+        
+        Returns:
+        voxel prediction, per voxel corr_coeff
+        '''
         bn, bv = self.batch_n_t, self.batch_v_t
         n, nv = voxels.shape
-        assert n<=bn
         nt = 1
+        assert len(mst_data)==len(voxels)
+        assert len(mst_rel_models)==nv ## voxelmodels interpreted as relative model  
+        assert mst_rel_models.dtype==int
+        assert n<=bn
              
         predictions = np.zeros(shape=(n, nv), dtype=fpX)
         val_scores  = np.zeros(shape=(nv), dtype=fpX)
@@ -633,127 +685,72 @@ class FWRF_model(object):
         rbv = nv - nbv * bv
         print "%d voxel batches of size %d with residual %d" % (nbv, bv, rbv)
         sys.stdout.flush()
-        ##
-        if use_data_as_rfw_data:
-            assert len(datas)==len(voxels)
-            assert len(voxelmodels)==nv ## voxelmodels interpreted as relative model        
-            for rv, lv in tqdm(iterate_range(0, nv, bv)): ## VOXEL BATCH LOOP
-                #print "\n  Voxel %d:%d of %d" % (rv[0], rv[-1]+1, nv)
-                start_time = time.time()
-                voxelSlice = voxels[:,rv]
-                vm_slice = voxelmodels[rv]
-                rW = params[0][rv,:]
-                rb = params[1][rv]
-                if lv<bv: #PATCH UP MISSING DATA FOR THE FIXED BATCH SIZE
-                    voxelSlice = np.concatenate((voxelSlice, np.zeros(shape=(n, bv-lv), dtype=fpX)), axis=1)
-                    vm_slice = np.concatenate((vm_slice, np.zeros(shape=(bv-lv), dtype=int)), axis=0)
-                    rW = np.concatenate((rW, np.zeros(shape=(bv-lv, self.nf), dtype=fpX)), axis=0)
-                    rb = np.concatenate((rb, np.zeros(shape=(bv-lv), dtype=fpX)), axis=0) 
-                pW = rW.T.reshape((self.nf,bv,1))
-                pb = rb.reshape((1,bv,1))      
-
-                pv_rfw_data = datas[:, :, 0, vm_slice, np.newaxis]
-                set_shared_parameters(self.fwrf_f_params, [pW, pb])
-                prep_time = time.time()
-                ###            
-                pred, cc = self.fwrf_f_test_fn(pv_rfw_data, voxelSlice)
-                predictions[:, rv], val_scores[rv] = pred[:,:lv,0], cc[:lv,0]
-                ###
-                #print "prep time = %.3fs, calc time = %.3fs" % (prep_time-start_time, time.time()-prep_time)        
-        else:
-            assert len(datas[0])==len(voxels)
-            assert voxelmodels.shape[0]==nv
-            assert voxelmodels.shape[1]==3     
-            for rv, lv in tqdm(iterate_range(0, nv, bv)): ## VOXEL BATCH LOOP
-                #print "\n  Voxel %d:%d of %d" % (rv[0], rv[-1]+1, nv)
-                start_time = time.time()
-                voxelSlice = voxels[:,rv]
-                vm_slice = voxelmodels[rv,:]
-                rW = params[0][rv,:]
-                rb = params[1][rv]
-                if lv<bv: #PATCH UP MISSING DATA FOR THE FIXED BATCH SIZE
-                    voxelSlice = np.concatenate((voxelSlice, np.zeros(shape=(n, bv-lv), dtype=fpX)), axis=1)
-                    vm_slice = np.concatenate((vm_slice, np.ones(shape=(bv-lv,3), dtype=fpX)), axis=0)
-                    rW = np.concatenate((rW, np.zeros(shape=(bv-lv, self.nf), dtype=fpX)), axis=0)
-                    rb = np.concatenate((rb, np.zeros(shape=(bv-lv), dtype=fpX)), axis=0) 
-                pW = rW.T.reshape((self.nf,bv,1))
-                pb = rb.reshape((1,bv,1))      
-
-                set_shared_parameters(self.fwrf_t_params, [pW, pb])
-                set_shared_batched_feature_maps_gaussian_weights(self._sRFWs_t, vm_slice[:,0], vm_slice[:,1], vm_slice[:,2], size=self.view_angle) 
-                prep_time = time.time()
-                ###            
-                args = datas+[voxelSlice] 
-                pred, cc = self.fwrf_t_test_fn(*args)
-                predictions[:, rv], val_scores[rv] = pred[:,:lv,0], cc[:lv,0]
-                ###
-                #print "prep time = %.3fs, calc time = %.3fs" % (prep_time-start_time, time.time()-prep_time)
-        return predictions, val_scores
-    
-    
-
-    
-    
-    def prediction(self, datas, voxelmodels, params):
-        bn, bv = self.batch_n_t, self.batch_v_t
-        n = datas[0].shape[0]
-        nv = voxelmodels.shape[0]
-        assert voxelmodels.shape[1]==3
-        nt = 1
-           
-        predictions = np.zeros(shape=(n, nv), dtype=fpX)
-        
-        nbv = nv // bv
-        rbv = nv - nbv * bv
-        print "%d voxel batches of size %d with residual %d" % (nbv, bv, rbv)
-        ##
+        ##    
         for rv, lv in tqdm(iterate_range(0, nv, bv)): ## VOXEL BATCH LOOP
             #print "\n  Voxel %d:%d of %d" % (rv[0], rv[-1]+1, nv)
+            start_time = time.time()
             voxelSlice = voxels[:,rv]
-            vm_slice = voxelmodels[rv,:]
+            vm_slice = mst_rel_models[rv]
             rW = params[0][rv,:]
             rb = params[1][rv]
             if lv<bv: #PATCH UP MISSING DATA FOR THE FIXED BATCH SIZE
                 voxelSlice = np.concatenate((voxelSlice, np.zeros(shape=(n, bv-lv), dtype=fpX)), axis=1)
-                vm_slice = np.concatenate((vm_slice, np.ones(shape=(bv-lv,3), dtype=fpX)), axis=0)
+                vm_slice = np.concatenate((vm_slice, np.zeros(shape=(bv-lv), dtype=int)), axis=0)
                 rW = np.concatenate((rW, np.zeros(shape=(bv-lv, self.nf), dtype=fpX)), axis=0)
                 rb = np.concatenate((rb, np.zeros(shape=(bv-lv), dtype=fpX)), axis=0) 
             pW = rW.T.reshape((self.nf,bv,1))
             pb = rb.reshape((1,bv,1))      
 
-            set_shared_parameters(self.fwrf_t_params, [pW, pb])
-            set_shared_batched_feature_maps_gaussian_weights(self._sRFWs_t, vm_slice[:,0], vm_slice[:,1], vm_slice[:,2], size=self.view_angle) 
-            ###       
-            for rb, lb in iterate_slice(0, n, bn):
-                args = slice_arraylist(datas, rb)
-                pred = self.fwrf_t_pred_fn(*args) 
-                predictions[rb, rv] = pred[:,:lv,0]
-            ###
-        return predictions
+            pv_mst_data = mst_data[:, :, 0, vm_slice, np.newaxis]
+            set_shared_parameters(self.fwrf_f_params, [pW, pb])
+            prep_time = time.time()
+            ###            
+            pred, cc = self.fwrf_f_test_fn(pv_mst_data, voxelSlice)
+            predictions[:, rv], val_scores[rv] = pred[:,:lv,0], cc[:lv,0]
 
-
-
+        return predictions, val_scores
     
-def infer_voxel_noise_model(voxels, predictions):
-    ''' 
-    voxels and predictions are (T, V)
-    '''    
-    vox_avg = np.mean(voxels-predictions, axis=0)
-    vox_std = np.sqrt(np.var(voxels, axis=0) - np.var(predictions, axis=0))
-    return vox_avg, vox_std
-    
-def apply_per_voxel_noise_model(voxels, noise_avg, noise_std):
-    ''' 
-    voxels is (T, V)
-    noise_mean and noise_std are (V,)
+
+
+def fwrf_symbolic_prediction(_symbolicFeatureMaps, featureMapSizes, voxelmodels, params, avg=None, std=None, nonlinearity=None, view_angle=20.0):
     '''
-    noise = np.random.normal(size=voxels.shape).astype(fpX)
-    noise = (noise * noise_std[np.newaxis, :]) + noise_avg[np.newaxis, :]
-    return voxels + noise
+    Unlike the training procedure which is trained by part, this creates a matching theano expression from end-to-end.
+    
+    Arguments:
+    _symbolicFeatureMaps: the symbolic feature maps using for training
+    featureMapSizes: the feature maps sizes
+    voxelmodels: the absolute receptive field coordinate i.e. a (V,3) array whose entry are (x, y, sigma)
+    params: the feature tuning parameters
+    (optional) avg, std: the average and standard deviation from z-scoring.
+    (optional) nonlinearity: a callable function f(x) which returns a theano expression for an elementwise nonlinearity.
+    view_angle (default 20.0): Same as during training. This just fix the scale relative to the values of the voxelmodels.
+    
+    Returns:
+    A symbolic variable representing the prediction of the fwRF model.
+    
+    Note: There is quite a bit of repetition due the idiosyncracies of the training procedure. Make sure
+    that this compiled expression returns the same values has validate_models when run on the same data.
+    '''
+    nf = np.sum([fm[1] for fm in featureMapSizes])
+    nv = nv = voxelmodels.shape[0]
+    assert voxelmodels.shape[1]==3
 
-def symbolic_per_voxel_noise_model(_voxels, noise_avg, noise_std):
-    rng = T.raw_random.RandomStreamsBase()
-    _noise_std = theano.shared(noise_avg.astype(fpX)[np.newaxis,:])
-    _noise_avg = theano.shared(noise_std.astype(fpX)[np.newaxis,:])
-    _noise = (rng.normal(size=voxels.shape) * _noise_std) + _noise_avg
-    return _voxels + _noise
+    print 'CREATING SYMBOLS\n'
+    _smsts,_ = create_shared_batched_feature_maps_gaussian_weights(featureMapSizes, nv, 1, verbose=True)
+    if avg is not None:
+        if nonlinearity is not None:
+            _fwrf = pvFWRF(normalize_mst_data(nonlinearity(mst_data(_symbolicFeatureMaps, _smsts)), avg, std), nf, nv, 1)
+        else:
+            _fwrf = pvFWRF(normalize_mst_data(mst_data(_symbolicFeatureMaps, _smsts), avg, std), nf, nv, 1)
+    else:
+        if nonlinearity is not None:
+            _fwrf = pvFWRF(nonlinearity(mst_data(_symbolicFeatureMaps, _smsts)), nf, nv, 1)
+        else:
+            _fwrf = pvFWRF(mst_data(_symbolicFeatureMaps, _smsts), nf, nv, 1)            
+    plu.print_lasagne_network(_fwrf, skipnoparam=False)
+        
+    fwrf_params = L.get_all_params(_fwrf, trainable=True)
+    set_shared_parameters(fwrf_params, [params[0].T.reshape((nf,nv,1)), params[1].reshape((1,nv,1))])
+    set_shared_batched_feature_maps_gaussian_weights(_smsts, voxelmodels[:,0], voxelmodels[:,1], voxelmodels[:,2], size=view_angle)      
+        
+    return L.get_output(_fwrf, deterministic=True).flatten(ndim=2)

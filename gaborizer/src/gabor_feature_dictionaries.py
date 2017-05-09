@@ -3,7 +3,7 @@ import pandas as pd
 from theano import tensor as tnsr
 from theano import function, scan
 from time import time
-from hrf_fitting.src.features import make_complex_gabor, make_gabor
+from gaborizer.src.features import make_complex_gabor, make_gabor
 from PIL import Image
 from skimage.transform import resize
 
@@ -117,7 +117,7 @@ def make_gabor_table(orientations,deg_per_stimulus,cycles_per_deg,
 def make_gabor_stack(gbr_table, pix_per_filter, cycles_per_filter, envelope_radius_pix, complex_cell=True,color_channels=1):
     
     ##initialize
-    filter_stack = np.zeros((gbr_table.shape[0],color_channels,pix_per_filter,pix_per_filter))
+    filter_stack = np.zeros((gbr_table.shape[0],color_channels,int(pix_per_filter), int(pix_per_filter)))
     if complex_cell:
         filter_stack = filter_stack+1j
     
