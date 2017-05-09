@@ -1,5 +1,5 @@
 # The feature-weighted receptive field (fwRF) 
-Example code and analysis for the paper: [The feature-weighted receptive field: an interpretable encoding model for complex feature spaces](https://github.com/styvesg/fwrf).
+Example code and analysis for the paper: [The feature-weighted receptive field: an interpretable encoding model for complex feature spaces](http://biorxiv.org/content/early/2017/04/11/126318).
 
 Note that a latex browser extension (like mathjax for github) may be necessary for displaying correctly the following text (Ex: pi=$\pi$ should show pi and the symbol for pi).
 
