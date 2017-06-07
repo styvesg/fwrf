@@ -24,8 +24,8 @@ import lasagne.nonlinearities as NL
 import lasagne.objectives as O
 import lasagne.init as I
 
-import src.pyNumpyUtility as pnu
-import src.pyLasagneUtility as plu
+import src.numpy_utility as pnu
+import src.lasagne_utility as plu
 
 
 fpX = np.float32
@@ -219,8 +219,11 @@ class pvFWRFLayer(L.Layer):
         super(pvFWRFLayer, self).__init__(incoming, **kwargs)
         self.nf, self.nv, self.nt = self.input_shape[1:4]
         self.W = self.add_param(W, (self.nf, self.nv, self.nt), name='W')
-        self.b = self.add_param(b, (1, self.nv, self.nt), name='b', regularizable=False)
-        self.b = T.patternbroadcast(self.b, (True, False, False))
+        if b is not None:
+            self.b = self.add_param(b, (1, self.nv, self.nt), name='b', regularizable=False)
+            self.b = T.patternbroadcast(self.b, (True, False, False))
+        else:
+            self.b = None
         self.nonlinearity = (NL.identity if nonlinearity is None else nonlinearity)
         
     def get_output_for(self, input, **kwargs):
@@ -251,8 +254,11 @@ class svFWRFLayer(L.Layer):
         self.nt = self.input_shape[2]
         self.nv = nvoxels
         self.W = self.add_param(W, (self.nf, self.nv, self.nt), name='W')
-        self.b = self.add_param(b, (1, self.nv, self.nt), name='b', regularizable=False)
-        self.b = T.patternbroadcast(self.b, (True, False, False))
+        if b is not None:
+            self.b = self.add_param(b, (1, self.nv, self.nt), name='b', regularizable=False)
+            self.b = T.patternbroadcast(self.b, (True, False, False))
+        else:
+            self.b = None
         self.nonlinearity = (NL.identity if nonlinearity is None else nonlinearity)
         
     def get_output_for(self, input, **kwargs):
@@ -494,16 +500,12 @@ class FWRF_model(object):
 
     
 
-    def __optimize_shared_models(self, mst_data, voxels, params, val_test_size=100, num_epochs=1, output_val_scores=True, verbose=True, dry_run=False):
+    def __optimize_shared_models(self, mst_data, voxels, params, val_test_size=100, num_epochs=1, output_val_scores=-1, output_val_every=1, verbose=True, dry_run=False):
         bn, bv, bt = self.batch_n_o, self.batch_v_o, self.batch_t_o
         n, nv = voxels.shape
         nt = mst_data.shape[3]
         
-        val_scores = []
-        if output_val_scores:
-            val_scores  = np.zeros(shape=(num_epochs, nv, nt), dtype=fpX)
         val_batch_scores = np.zeros((bv, bt), dtype=fpX)
-        
         best_scores = np.full(shape=(nv), fill_value=np.inf, dtype=fpX)
         best_models = np.zeros(shape=(nv), dtype=int)
 
@@ -518,10 +520,19 @@ class FWRF_model(object):
             print "%d candidate batches of size %d with residual %d" % (nbt, bt, rbt)
             print "for %d voxelmodel fits." % (nv*nt)
             sys.stdout.flush()    
+        ### save score history
+        num_outputs = int(num_epochs / output_val_every)
+        val_scores = []
+        if output_val_scores==-1:
+            val_scores  = np.zeros(shape=(num_outputs, nv, nt), dtype=fpX) 
+        elif output_val_scores>0:
+            outv = output_val_scores
+            val_scores  = np.zeros(shape=(num_outputs, bv*outv, nt), dtype=fpX) 
+        ###
         if dry_run:
             return val_scores, best_scores, best_models, best_params
         ### voxel loop
-        for rv, lv in tqdm(iterate_range(0, nv, bv)): ## VOXEL BATCH LOOP
+        for v, (rv, lv) in tqdm(enumerate(iterate_range(0, nv, bv))): ## VOXEL BATCH LOOP
             voxelSlice = voxels[:,rv] 
             best_scores_slice = best_scores[rv]
             best_models_slice = best_models[rv] 
@@ -560,8 +571,12 @@ class FWRF_model(object):
                     val_batch_scores /= val_batches
                     if verbose:
                         print "    validation <loss>: %.6f" % (val_batch_scores.mean())
-                    if output_val_scores:
-                        val_scores[epoch, rv, t*bt:(t+1)*bt] = val_batch_scores[:lv,:]
+                    ### RECORD TIME SERIES ###
+                    if epoch%output_val_every==0:
+                        if output_val_scores==-1:
+                            val_scores[int(epoch / output_val_every), rv, t*bt:(t+1)*bt] = val_batch_scores[:lv,:] 
+                        elif output_val_scores>0:
+                            val_scores[int(epoch / output_val_every), v*outv:(v+1)*outv, t*bt:(t+1)*bt] = val_batch_scores[:min(outv, lv),:]
                     ##### RECORD MINIMUM SCORE AND MODELS #####
                     best_models_for_this_epoch = np.argmin(val_batch_scores[:lv,:], axis=1)
                     best_scores_for_this_epoch = np.amin(val_batch_scores[:lv,:], axis=1)
@@ -595,7 +610,7 @@ class FWRF_model(object):
         
         
 
-    def shared_model_training(self, mst_data, voxels, sharedModel_specs, params, val_test_size=100, lr=1e-4, l2=0.0, num_epochs=1, output_val_scores=True, verbose=True, dry_run=False):
+    def shared_model_training(self, mst_data, voxels, sharedModel_specs, params, val_test_size=100, lr=1e-4, l2=0.0, num_epochs=1, output_val_scores=-1, output_val_every=1, verbose=True, dry_run=False):
         ''' 
         Train the specified models
         
@@ -633,7 +648,7 @@ class FWRF_model(object):
         start_time = time.time()
         val_scores, best_scores, best_rel_models, best_params = self.__optimize_shared_models(\
             mst_data, voxels, params, val_test_size=val_test_size,\
-            num_epochs=num_epochs, output_val_scores=output_val_scores, verbose=verbose, dry_run=dry_run)  
+            num_epochs=num_epochs, output_val_scores=output_val_scores, output_val_every=output_val_every, verbose=verbose, dry_run=dry_run)  
         
         # free shared vram
         self.__mst_sdata.set_value(np.asarray([], dtype=fpX).reshape((0,0,0,0)))
