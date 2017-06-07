@@ -24,8 +24,8 @@ import lasagne.nonlinearities as NL
 import lasagne.objectives as O
 import lasagne.init as I
 
-import src.numpy_utility as pnu
-import src.lasagne_utility as plu
+import numpy_utility as pnu
+import lasagne_utility as plu
 
 
 fpX = np.float32
