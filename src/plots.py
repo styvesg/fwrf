@@ -21,9 +21,10 @@ def display_candidate_loss(scores, nx, ny, ns):
     print "score range = (%f, %f)" % (smin, smax)
     for i in range(ns):
         plt.subplot(dis_y, 3, i+1)
-        plt.imshow(s[:,:,i], interpolation='None')
+        plt.imshow(s[:,:,i], interpolation='None', cmap='jet')
         plt.title('sigma canditate = %d' % i)
         plt.clim(smin, smax)
+        plt.grid('off')
         if(idxs[2]==i):
             ax = plt.gca()
             ax.add_artist(best)

@@ -445,7 +445,7 @@ class FWRF_model(object):
         n = len(datas[0])
         bn, bt = self.batch_n_p, self.batch_t_p
         vm = np.asarray(sharedModel_specs[0])
-        nt = np.prod([sms.length for sms in sharedModel_specs[1]])           
+        nt = np.prod([sms.length for sms in sharedModel_specs[1]])          
         #rx, ry, rs = [sms(vm[i,0], vm[i,1]) for i,sms in enumerate(sharedModel_specs[1])]
         mx, my, ms = self.svModelSpace(sharedModel_specs)
         if verbose:
@@ -504,7 +504,9 @@ class FWRF_model(object):
         bn, bv, bt = self.batch_n_o, self.batch_v_o, self.batch_t_o
         n, nv = voxels.shape
         nt = mst_data.shape[3]
-        
+        print "Grad. Desc. performed in %d batch with batch size %d and residual %d" % \
+            (int(np.ceil(float(n-val_test_size) / bn)), bn, (n-val_test_size)%bn)
+
         val_batch_scores = np.zeros((bv, bt), dtype=fpX)
         best_scores = np.full(shape=(nv), fill_value=np.inf, dtype=fpX)
         best_models = np.zeros(shape=(nv), dtype=int)
@@ -521,7 +523,7 @@ class FWRF_model(object):
             print "for %d voxelmodel fits." % (nv*nt)
             sys.stdout.flush()    
         ### save score history
-        num_outputs = int(num_epochs / output_val_every)
+        num_outputs = int(num_epochs / output_val_every) + 1
         val_scores = []
         if output_val_scores==-1:
             val_scores  = np.zeros(shape=(num_outputs, nv, nt), dtype=fpX) 
