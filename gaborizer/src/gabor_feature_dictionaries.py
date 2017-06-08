@@ -3,7 +3,7 @@ import pandas as pd
 from theano import tensor as tnsr
 from theano import function, scan
 from time import time
-from gaborizer.src.features import make_complex_gabor, make_gabor
+from features import make_complex_gabor, make_gabor
 from PIL import Image
 from skimage.transform import resize
 
