@@ -508,6 +508,8 @@ class FWRF_model(object):
             (int(np.ceil(float(n-val_test_size) / bn)), bn, (n-val_test_size)%bn)
 
         val_batch_scores = np.zeros((bv, bt), dtype=fpX)
+##!!!
+        best_epochs = np.zeros(shape=(nv), dtype=int)
         best_scores = np.full(shape=(nv), fill_value=np.inf, dtype=fpX)
         best_models = np.zeros(shape=(nv), dtype=int)
 
@@ -521,9 +523,9 @@ class FWRF_model(object):
             print "%d voxel batches of size %d with residual %d" % (nbv, bv, rbv)
             print "%d candidate batches of size %d with residual %d" % (nbt, bt, rbt)
             print "for %d voxelmodel fits." % (nv*nt)
-            sys.stdout.flush()    
+            sys.stdout.flush()       
         ### save score history
-        num_outputs = int(num_epochs / output_val_every) + 1
+        num_outputs = int(num_epochs / output_val_every) + int(num_epochs%output_val_every>0)
         val_scores = []
         if output_val_scores==-1:
             val_scores  = np.zeros(shape=(num_outputs, nv, nt), dtype=fpX) 
@@ -535,7 +537,9 @@ class FWRF_model(object):
             return val_scores, best_scores, best_models, best_params
         ### voxel loop
         for v, (rv, lv) in tqdm(enumerate(iterate_range(0, nv, bv))): ## VOXEL BATCH LOOP
-            voxelSlice = voxels[:,rv] 
+            voxelSlice = voxels[:,rv]
+##!!!
+            best_epochs_slice = best_epochs[rv] 
             best_scores_slice = best_scores[rv]
             best_models_slice = best_models[rv] 
             rW = params[0][rv,:]
@@ -584,7 +588,8 @@ class FWRF_model(object):
                     best_scores_for_this_epoch = np.amin(val_batch_scores[:lv,:], axis=1)
                     # This updates the BEST RELATIVE MODELS, along with their associated scores 
                     best_scores_mask = (best_scores_for_this_epoch<best_scores_slice) #all the voxels that show an improvement
-
+##!!!
+                    best_epochs_slice[best_scores_mask] = epoch  
                     np.copyto(best_scores_slice, best_scores_for_this_epoch, casting='same_kind', where=best_scores_mask)      
                     np.copyto(best_models_slice, best_models_for_this_epoch + t*bt, casting='same_kind', where=best_scores_mask) #notice the +t*bt to return the best model across all models, not just the batch's
                     #to select the weight slices we need, we need to specify the voxels that showed improvement AND the models that correspond to these improvements.
@@ -599,10 +604,12 @@ class FWRF_model(object):
                 print "    %d Epoch for %d voxelmodels took %.3fs @ %.3f voxelmodels/s" % (num_epochs, lv*bt, batch_time, fpX(lv*bt)/batch_time)
                 sys.stdout.flush()
             #end candidate loop    
+##!!!
+            best_epochs[rv] = np.copy(best_epochs_slice)
             best_scores[rv] = np.copy(best_scores_slice) ##NECESSARY TO COPY BACK
             best_models[rv] = np.copy(best_models_slice)   
         # end voxel loop
-        return val_scores, best_scores, best_models, best_params
+        return val_scores, best_scores, best_epochs, best_models, best_params
 
 
 
@@ -648,7 +655,7 @@ class FWRF_model(object):
         ### THIS IS WHERE THE MODEL OPTIMIZATION IS PERFORMED ### 
         print "\nVoxel-Candidates model optimization..."
         start_time = time.time()
-        val_scores, best_scores, best_rel_models, best_params = self.__optimize_shared_models(\
+        val_scores, best_scores, best_epochs, best_rel_models, best_params = self.__optimize_shared_models(\
             mst_data, voxels, params, val_test_size=val_test_size,\
             num_epochs=num_epochs, output_val_scores=output_val_scores, output_val_every=output_val_every, verbose=verbose, dry_run=dry_run)  
         
@@ -671,7 +678,7 @@ class FWRF_model(object):
                 best_mst_data_avg[v,:] = self.mst_avg[0,:,0,best_rel_models[v]]
                 best_mst_data_std[v,:] = self.mst_std[0,:,0,best_rel_models[v]]
 
-        return val_scores, best_scores, best_abs_models, best_rel_models, best_params, best_mst_data_avg, best_mst_data_std
+        return val_scores, best_scores, best_epochs, best_abs_models, best_rel_models, best_params, best_mst_data_avg, best_mst_data_std
     
 
 
