@@ -46,7 +46,7 @@ def plot_rf_as_circles(rfs, smin, smax):
     plt.gca().set_aspect('equal')
 
 
-def plot_pretty_scatter(X,Y, threshold, xlim, ylim):
+def plot_pretty_scatter(X, Y, threshold, xlim, ylim):
     lim = 256.
     start = map(lambda x: 1.*x/lim, (245,236,225)) #oatmeal
     stop = map(lambda x: .5*x/lim, (137,205,187)) #aqua
@@ -81,3 +81,5 @@ def plot_pretty_scatter(X,Y, threshold, xlim, ylim):
     g.ax_joint.plot([0., xlim[1]], [threshold, threshold -  xlim[1] / 2], '--r', lw=2)
     g.ax_joint.plot([xlim[0], 0.], [threshold +  xlim[0] / 2, threshold], '--r', lw=2)
     return g
+    
+
