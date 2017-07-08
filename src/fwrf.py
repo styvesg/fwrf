@@ -375,9 +375,9 @@ def model_space_tensor(
     _smsts, nf = create_shared_batched_feature_maps_gaussian_weights(fmap_sizes, 1, bt, verbose=verbose)
     _mst_data = get_mst_data(_fmaps, _smsts)  
     if verbose:
-        print "\n>> Storing the full modelspace tensor will require approx %.03fGb of RAM!" % (fpX(n*nf*nt*4) / 1024**3)
-        print ">> Will be divided in chunks of %.03fGb of VRAM!" % ((fpX(n*nf*bt*4) / 1024**3))
-    print '\nCOMPILING...'
+        print ">> Storing the full modelspace tensor will require approx %.03fGb of RAM!" % (fpX(n*nf*nt*4) / 1024**3)
+        print ">> Will be divided in chunks of %.03fGb of VRAM!\n" % ((fpX(n*nf*bt*4) / 1024**3))
+    print 'COMPILING...'
     sys.stdout.flush()
     comp_t = time.time()
     mst_data_fn  = theano.function(_invars, _mst_data)
@@ -411,8 +411,8 @@ def model_space_tensor(
         if mst_avg is not None and mst_std is not None:
             print "Using provided z-scoring values."
             sys.stdout.flush()
-            assert mst_data.shape[1:]==mst_avg[1:]
-            assert mst_data.shape[1:]==mst_std[1:]
+            assert mst_data.shape[1:]==mst_avg.shape[1:], "%s!=%s" % (mst_data.shape[1:], mst_avg.shape[1:])
+            assert mst_data.shape[1:]==mst_std.shape[1:], "%s!=%s" % (mst_data.shape[1:], mst_avg.shape[1:])
             mst_avg_loc = mst_avg 
             mst_std_loc = mst_std
             for rr, rl in tqdm(iterate_slice(0, mst_data.shape[3], bt)):   
@@ -470,7 +470,6 @@ def learn_params(
     _smst_batch = __mst_sdata[__range[0]:__range[1]]
     _fwrf_o = svFWRF(_smst_batch, nf, bv, bt)
     if verbose:
-        print "\n"
         plu.print_lasagne_network(_fwrf_o, skipnoparam=False)
     ### define and compile the training expressions.       
     _fwrf_o_reg = __l2 * R.regularize_layer_params(_fwrf_o, R.l2)
@@ -486,7 +485,7 @@ def learn_params(
     ###
     __fwrf_o_updates = lasagne.updates.sgd(_fwrf_o_trn_loss, fwrf_o_params, learning_rate=__lr)
     #__fwrf_o_updates = lasagne.updates.adam(_fwrf_o_trn_loss, fwrf_o_params, learning_rate=self.__lr, beta1=0.5, epsilon=1e-12)
-    print '\nCOMPILING...'
+    print 'COMPILING...'
     sys.stdout.flush()
     comp_t = time.time()
     fwrf_o_trn_fn = theano.function([__range], updates=__fwrf_o_updates)
@@ -642,7 +641,7 @@ def get_prediction(mst_data, voxels, mst_rel_models, w_params, batches=(1,1)):
     _fwrf_t_val_pred = L.get_output(_fwrf_t, deterministic=True)   
     _fwrf_t_val_cc = ((_fwrf_t_val_pred - _fwrf_t_val_pred.mean(axis=0, keepdims=True)) * (__V - __V.mean(axis=0, keepdims=True))).mean(axis=0) / \
         T.sqrt(T.sqr(_fwrf_t_val_pred - _fwrf_t_val_pred.mean(axis=0, keepdims=True)).mean(axis=0) * T.sqr(__V - __V.mean(axis=0, keepdims=True)).mean(axis=0))         
-    print '\nCOMPILING...'
+    print 'COMPILING...'
     sys.stdout.flush()
     comp_t = time.time()
     fwrf_t_pred_fn = theano.function([_mst_data], _fwrf_t_val_pred)
@@ -733,7 +732,7 @@ def get_symbolic_prediction(_symbolicFeatureMaps, featureMapSizes, rf_params, w_
         else:
             _nmst, _stats = normalize_mst_data(mst_data(_symbolicFeatureMaps, _smsts), avg, std)
             _fwrf = pvFWRF(_nmst, nf, nv, 1)
-         shared_var['mst_norm'] = _stats
+        shared_var['mst_norm'] = _stats
     else:
         if nonlinearity is not None:
             _fwrf = pvFWRF(nonlinearity(mst_data(_symbolicFeatureMaps, _smsts)), nf, nv, 1)
@@ -763,13 +762,13 @@ def kout_learn_params(mst_data, voxels, val_sample_order, w_params, batches=(1,1
     trn_size = data_size - val_part_size
 
     assert np.modf(float(data_size)/val_part_size)[0]==0.0, "num_val_part (%d) has to be an exact divisor of the set size (%d)" % (num_val_part, data_size)
-    print "trn_size = %d (incl. holdout), holdout_size = %d, val_size = %d\n" % (trn_size, tho_size, val_part_size)
+    print "trn_size = %d (incl. holdout), holdout_size = %d, val_size = %d\n" % (trn_size, holdout_size, val_part_size)
     model = {}
     if test_run:
         tnv = batches[1]
-        print "################################"
+        print "####################################"
         print "### Test run %d of %d voxels ###" % (tnv, nv)
-        print "################################"       
+        print "####################################"       
         k, (vs,ls) = 0, (slice(0, val_part_size), val_part_size)
         
         trn_mask = np.ones(data_size, dtype=bool)
@@ -780,7 +779,7 @@ def kout_learn_params(mst_data, voxels, val_sample_order, w_params, batches=(1,1
 
         trn_voxel_data = voxels[trn_mask, 0:tnv]
         val_voxel_data = voxels[~trn_mask, 0:tnv]
-        voxelParams = [p[0:tnv] for p in params]
+        voxelParams = [p[0:tnv] for p in w_params]
         ### fit this part ###
         val_scores, best_scores, best_epochs, best_candidates, best_w_params = learn_params(\
             trn_mst_data, trn_voxel_data, w_params, batches=batches,\
@@ -803,7 +802,7 @@ def kout_learn_params(mst_data, voxels, val_sample_order, w_params, batches=(1,1
     else:
         # The more parts, the more data each part has to learn the prediction. It's a leave k-out.
         full_val_pred = np.zeros(shape=voxels.shape, dtype=fpX)
-        for k,(vs,ls) in enumerate(prf.iterate_slice(0, data_size, val_part_size)):
+        for k,(vs,ls) in enumerate(iterate_slice(0, data_size, val_part_size)):
             print "################################"
             print "###   Resampling block %2d   ###" % k
             print "################################"
