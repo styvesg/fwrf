@@ -197,13 +197,13 @@ def set_shared_batched_feature_maps_gaussian_weights(_psmsts, xs, ys, ss, size=2
         a.set_value(mst.reshape((nv, nt, n_pix, n_pix)))
     return _psmsts
     
-def set_shared_parameters(shared_vars, values):
-    for i,var in enumerate(shared_vars):
-        var.set_value(values[i])    
-
-
-
-
+def set_shared_parameters(shared_vars, values=None):
+    if values:
+        for var, val in zip(shared_vars, values):
+            var.set_value(val.reshape(var.get_value(borrow=True, return_internal_type=True).shape))    
+    else: #clear vram
+        for var in shared_vars:
+            var.set_value(np.asarray([], dtype=fpX).reshape((0,)*len(var.get_value(borrow=True, return_internal_type=True).shape)))
 
 ########################################################################
 ###              SPECIAL LASAGNE LAYER AND MODEL                     ###
@@ -404,6 +404,8 @@ def model_space_tensor(
         for rr, rl in tqdm(iterate_slice(0, mst_data.shape[3], bt)): 
             mst_data[:,:,:,rr] = nonlinearity(mst_data[:,:,:,rr])
     ### OPTIONAL Z-SCORING
+    mst_avg_loc = None
+    mst_std_loc = None
     if zscore:
         if trn_size==None:
             trn_size = len(mst_data)
@@ -431,8 +433,9 @@ def model_space_tensor(
                 mst_data[:,:,:,rr] /= mst_std_loc[:,:,:,rr]
                 mst_data[:,:,:,rr] = np.nan_to_num(mst_data[:,:,:,rr])
     ### Free the VRAM
-    for _s in _smsts:
-        _s.set_value(np.asarray([], dtype=fpX).reshape((0,0,0,0)))
+    set_shared_parameters(_smsts)
+    #for _s in _smsts:
+    #    _s.set_value(np.asarray([], dtype=fpX).reshape((0,0,0,0)))
     return mst_data, mst_avg_loc, mst_std_loc
 
 
@@ -506,7 +509,7 @@ def learn_params(
     best_scores = np.full(shape=(nv), fill_value=np.inf, dtype=fpX)
     best_models = np.zeros(shape=(nv), dtype=int)
 
-    W, b = fwrf_o_params
+#    W, b = fwrf_o_params #!!!!!
     best_w_params = [np.zeros(p.shape, dtype=fpX) for p in w_params]      
         
     ### save score history
@@ -519,10 +522,12 @@ def learn_params(
         val_scores  = np.zeros(shape=(num_outputs, bv*outv, nt), dtype=fpX) 
     ###
     if dry_run:
-        __mst_sdata.set_value(np.asarray([], dtype=fpX).reshape((0,0,0,0)))
-        __vox_sdata.set_value(np.asarray([], dtype=fpX).reshape((0,0)))
-        W.set_value(np.asarray([], dtype=fpX).reshape((0,)*len(W.get_value().shape)))
-        b.set_value(np.asarray([], dtype=fpX).reshape((0,)*len(b.get_value().shape)))
+        # free vram
+        set_shared_parameters([__mst_sdata, __vox_sdata,] + fwrf_o_params)
+#        __mst_sdata.set_value(np.asarray([], dtype=fpX).reshape((0,0,0,0)))
+#        __vox_sdata.set_value(np.asarray([], dtype=fpX).reshape((0,0)))
+#        W.set_value(np.asarray([], dtype=fpX).reshape((0,)*len(W.get_value().shape)))
+#        b.set_value(np.asarray([], dtype=fpX).reshape((0,)*len(b.get_value().shape)))
         return val_scores, best_scores, best_epochs, best_models, best_w_params
     ### VOXEL LOOP
     for v, (rv, lv) in tqdm(enumerate(iterate_range(0, nv, bv))):
@@ -530,13 +535,21 @@ def learn_params(
         best_epochs_slice = best_epochs[rv] 
         best_scores_slice = best_scores[rv]
         best_models_slice = best_models[rv] 
-        rW, rb = w_params[0][rv,:], w_params[1][rv]
+        params_init = [p[rv] for p in w_params]
+#        rW, rb = w_params[0][rv,:], w_params[1][rv]
         if lv<bv: #PATCH UP MISSING DATA FOR THE FIXED VOXEL BATCH SIZE
             voxelSlice = np.concatenate((voxelSlice, np.zeros(shape=(n, bv-lv), dtype=fpX)), axis=1)
-            rW = np.concatenate((rW, np.zeros(shape=(bv-lv, nf), dtype=fpX)), axis=0)
-            rb = np.concatenate((rb, np.zeros(shape=(bv-lv), dtype=fpX)), axis=0)       
-        pW = np.repeat(rW.T, repeats=bt).reshape((nf,bv,bt)) # ALL CANDIDATE MODELS GET THE SAME INITIAL PARAMETER VALUES
-        pb = np.repeat(rb, repeats=bt).reshape((1, bv,bt))      
+            for i,p in enumerate(params_init):
+                params_init[i] = np.concatenate((p, np.zeros(shape=(bv-lv,)+p.shape[1:], dtype=fpX)), axis=0)
+#            rW = np.concatenate((rW, np.zeros(shape=(bv-lv, nf), dtype=fpX)), axis=0)
+#            rb = np.concatenate((rb, np.zeros(shape=(bv-lv), dtype=fpX)), axis=0)       
+        for i,p in enumerate(params_init):
+            if len(p.shape)==2:
+                params_init[i] = np.repeat(p.T, repeats=bt)
+            else:
+                params_init[i] = np.repeat(p, repeats=bt) 
+#        pW = np.repeat(rW.T, repeats=bt).reshape((nf,bv,bt)) # ALL CANDIDATE MODELS GET THE SAME INITIAL PARAMETER VALUES
+#        pb = np.repeat(rb, repeats=bt).reshape((1, bv,bt))      
                     
         set_shared_parameters([__vox_sdata], [voxelSlice])
         ### CANDIDATE LOOP
@@ -544,7 +557,7 @@ def learn_params(
             # need to recompile to reset the solver!!! (depending on the solver used)
             fwrf_o_trn_fn = theano.function([__range], updates=__fwrf_o_updates)
             # set the shared parameter values for this candidates. Every candidate restart at the same point.
-            set_shared_parameters(fwrf_o_params+[__mst_sdata], [pW, pb, mst_data[:,:,:,t*bt:(t+1)*bt]])
+            set_shared_parameters([__mst_sdata,]+fwrf_o_params, [mst_data[:,:,:,t*bt:(t+1)*bt],]+params_init)
             print "\n  Voxel %d:%d of %d, Candidate %d:%d of %d" % (rv[0], rv[-1]+1, nv, t*bt, (t+1)*bt, nt)
             ### EPOCH LOOP
             epoch_start = time.time()
@@ -582,8 +595,15 @@ def learn_params(
                 update_vm_pos[np.arange(lv)[best_scores_mask], best_models_for_this_epoch[best_scores_mask]] = True
                 update_vm_idx = np.arange(bv*bt)[update_vm_pos.flatten()]
                 # update the best parameter values based on the voxelmodel validation scores.
-                best_w_params[0][np.asarray(rv)[best_scores_mask], :] = (W.get_value().reshape((nf,-1))[:,update_vm_idx]).T
-                best_w_params[1][np.asarray(rv)[best_scores_mask]]    = b.get_value().reshape((-1))[update_vm_idx]   
+
+                for bwp, p in zip(best_w_params, fwrf_o_params):
+                    pv = p.get_value()
+                    if len(bwp.shape)==2:
+                        bwp[np.asarray(rv)[best_scores_mask]] = (pv.reshape((pv.shape[0],-1)).T)[update_vm_idx]
+                    else:
+                        bwp[np.asarray(rv)[best_scores_mask]] = (pv.reshape((-1)))[update_vm_idx]
+                #best_w_params[0][np.asarray(rv)[best_scores_mask], :] = (W.get_value().reshape((nf,-1))[:,update_vm_idx]).T
+                #best_w_params[1][np.asarray(rv)[best_scores_mask]]    = b.get_value().reshape((-1))[update_vm_idx]   
 
             batch_time = time.time()-epoch_start
             print "    %d Epoch for %d voxelmodels took %.3fs @ %.3f voxelmodels/s" % (num_epochs, lv*bt, batch_time, fpX(lv*bt)/batch_time)
@@ -594,10 +614,11 @@ def learn_params(
         best_models[rv] = np.copy(best_models_slice)   
     # end voxel loop 
     # free shared vram
-    __mst_sdata.set_value(np.asarray([], dtype=fpX).reshape((0,0,0,0)))
-    __vox_sdata.set_value(np.asarray([], dtype=fpX).reshape((0,0)))
-    W.set_value(np.asarray([], dtype=fpX).reshape((0,)*len(W.get_value().shape)))
-    b.set_value(np.asarray([], dtype=fpX).reshape((0,)*len(b.get_value().shape)))
+    set_shared_parameters([__mst_sdata, __vox_sdata,] + fwrf_o_params)
+    #__mst_sdata.set_value(np.asarray([], dtype=fpX).reshape((0,0,0,0)))
+    #__vox_sdata.set_value(np.asarray([], dtype=fpX).reshape((0,0)))
+    #W.set_value(np.asarray([], dtype=fpX).reshape((0,)*len(W.get_value().shape)))
+    #b.set_value(np.asarray([], dtype=fpX).reshape((0,)*len(b.get_value().shape)))
 
     full_time = time.time() - start_time
     print "\n---------------------------------------------------------------------"
@@ -654,18 +675,27 @@ def get_prediction(mst_data, voxels, mst_rel_models, w_params, batches=(1,1)):
     for rv, lv in tqdm(iterate_range(0, nv, bv)):
         voxelSlice = voxels[:,rv]
         vm_slice = mst_rel_models[rv]
-        rW = w_params[0][rv,:]
-        rb = w_params[1][rv]
+
+        voxel_params = [p[rv] for p in w_params]
+#        rW = w_params[0][rv,:]
+#        rb = w_params[1][rv]
+
         if lv<bv: #PATCH UP MISSING DATA FOR THE FIXED BATCH SIZE
             voxelSlice = np.concatenate((voxelSlice, np.zeros(shape=(n, bv-lv), dtype=fpX)), axis=1)
             vm_slice = np.concatenate((vm_slice, np.zeros(shape=(bv-lv), dtype=int)), axis=0)
-            rW = np.concatenate((rW, np.zeros(shape=(bv-lv, nf), dtype=fpX)), axis=0)
-            rb = np.concatenate((rb, np.zeros(shape=(bv-lv), dtype=fpX)), axis=0) 
-        pW = rW.T.reshape((nf,bv,1))
-        pb = rb.reshape((1,bv,1))      
+
+            for i,p in enumerate(voxel_params):
+                voxel_params[i] = np.concatenate((p, np.zeros(shape=(bv-lv,)+p.shape[1:], dtype=fpX)), axis=0)
+#            rW = np.concatenate((rW, np.zeros(shape=(bv-lv, nf), dtype=fpX)), axis=0)
+#            rb = np.concatenate((rb, np.zeros(shape=(bv-lv), dtype=fpX)), axis=0)     
+        for i,p in enumerate(voxel_params):
+            if len(p.shape)==2:
+                voxel_params[i] = p.T
+#        pW = rW.T.reshape((nf,bv,1))
+#        pb = rb.reshape((1,bv,1))      
 
         pv_mst_data = mst_data[:, :, 0, vm_slice, np.newaxis]
-        set_shared_parameters(fwrf_t_params, [pW, pb])
+        set_shared_parameters(fwrf_t_params, voxel_params)
         ###            
         pred, cc = fwrf_t_test_fn(pv_mst_data, voxelSlice)
         predictions[:, rv], cc_scores[rv] = pred[:,:lv,0], cc[:lv,0]
@@ -721,7 +751,6 @@ def get_symbolic_prediction(_symbolicFeatureMaps, featureMapSizes, rf_params, w_
     nf = np.sum([fm[1] for fm in featureMapSizes])
     nv = rf_params.shape[0]
     assert rf_params.shape[1]==3
-
     print 'CREATING SYMBOLS\n'
     _smsts,_ = create_shared_batched_feature_maps_gaussian_weights(featureMapSizes, nv, 1, verbose=True)
     shared_var['fpf_weight'] = _smsts
@@ -741,8 +770,17 @@ def get_symbolic_prediction(_symbolicFeatureMaps, featureMapSizes, rf_params, w_
     plu.print_lasagne_network(_fwrf, skipnoparam=False)
         
     fwrf_params = L.get_all_params(_fwrf, trainable=True)
+    assert(len(fwrf_params)==len(w_params)), "Mismatch between the number of parameters of the model and the number of parameter provided."
+    params = []
+    for p in w_params:
+        if len(p.shape)==2:
+             params += [p.T,]
+        else:
+             params += [p,]
+
     shared_var['fwrf_params'] = fwrf_params
-    set_shared_parameters(fwrf_params, [w_params[0].T.reshape((nf,nv,1)), w_params[1].reshape((1,nv,1))])
+    set_shared_parameters(fwrf_params, params)
+    #set_shared_parameters(fwrf_params, [w_params[0].T.reshape((nf,nv,1)), w_params[1].reshape((1,nv,1))])
     set_shared_batched_feature_maps_gaussian_weights(_smsts, rf_params[:,0], rf_params[:,1], rf_params[:,2], size=view_angle)      
         
     return L.get_output(_fwrf, deterministic=True).flatten(ndim=2), shared_var

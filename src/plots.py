@@ -46,6 +46,43 @@ def plot_rf_as_circles(rfs, smin, smax):
     plt.gca().set_aspect('equal')
 
 
+def plot_pretty_compare(X, Y, threshold, xlim, ylim):
+    color1 = '#084990'
+    color2 = '#3989c1'
+    x = X
+    y = Y
+    
+    g = sns.JointGrid(x, y, size=8, xlim=xlim, ylim=ylim)
+    # marg. plot
+    mask = np.logical_or(X>threshold, Y>threshold) #np.where(Xt[1]>threshold)[0]
+    _=g.plot_joint(plt.hexbin, bins='log', gridsize=30, cmap='Blues', extent=xlim+ylim)
+    ax1=g.ax_marg_x.hist(x,log=True, color=color2, bins=30, range=xlim) #distplot(color=".5",kde=False) #hist_kws={'log':True}
+    ax2=g.ax_marg_y.hist(y,log=True, color=color2, bins=30, orientation='horizontal', range=ylim)
+    
+    #adv = np.sum(ax1[0]) / (np.sum(ax1[0])+np.sum(ax2[0]))
+    #g.ax_marg_x.text(-0.55, 50., '%.2f' % adv, horizontalalignment='left', fontsize=18, color=color1, weight='bold')
+    #g.ax_marg_x.text( 0.45, 50., '%.2f' % (1.-adv), horizontalalignment='left', fontsize=18, color=color2, weight='bold')
+    #g.ax_marg_x.set_ylim([0.5, 5e2])
+    
+    g.ax_marg_x.get_yaxis().reset_ticks()
+    g.ax_marg_x.get_yaxis().set_ticks([1e0, 1e1, 1e2])
+    g.ax_marg_x.get_yaxis().set_ticklabels([1e0, 1e1, 1e2])
+    g.ax_marg_x.set_ylabel('Count', labelpad=10)
+    g.ax_marg_x.get_yaxis().grid(True)
+    g.ax_marg_x.get_yaxis().set_major_formatter(FormatStrFormatter('%d'))
+    #g.ax_marg_y.set_visible(False)
+
+    mm = [min(xlim[0],ylim[0]), max(xlim[1], ylim[1])]
+    g.ax_joint.plot(mm, mm, '--k', lw=2)
+    g.ax_joint.plot([threshold, threshold], [mm[0], threshold], '-r', lw=2)
+    g.ax_joint.plot([mm[0], threshold], [threshold, threshold], '-r', lw=2)
+    #g.ax_joint.plot(xlim, np.ones(len(xlim)) * threshold, '--r', lw=2)
+    #g.ax_joint.plot([0., xlim[1]], [threshold, threshold -  xlim[1] / 2], '--r', lw=2)
+    #g.ax_joint.plot([xlim[0], 0.], [threshold +  xlim[0] / 2, threshold], '--r', lw=2)
+    return g
+
+
+
 def plot_pretty_scatter(X, Y, threshold, xlim, ylim):
     lim = 256.
     start = map(lambda x: 1.*x/lim, (245,236,225)) #oatmeal
