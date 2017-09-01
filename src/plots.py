@@ -18,7 +18,7 @@ def display_candidate_loss(scores, nx, ny, ns):
     fig = plt.figure(figsize=(15, 5*dis_y))
     smin = np.min(s)
     smax = np.max(s)
-    print "score range = (%f, %f)" % (smin, smax)
+    # print "score range = (%f, %f)" % (smin, smax)
     for i in range(ns):
         plt.subplot(dis_y, 3, i+1)
         plt.imshow(s[:,:,i], interpolation='None', cmap='jet')
@@ -31,14 +31,31 @@ def display_candidate_loss(scores, nx, ny, ns):
     return fig
 
 
+#def plot_rf_as_circles(rfs, smin, smax):
+#    cNorm  = colors.Normalize(vmin=smin, vmax=smax)
+#    scalarMap = cmx.ScalarMappable(norm=cNorm, cmap=plt.get_cmap('cubehelix_r') )
+#    # print scalarMap.get_clim()
+#    for rf in rfs:
+#        colorVal = scalarMap.to_rgba(rf[2])
+#        c = plt.Circle((rf[0], rf[1]), rf[2], color=colorVal, fill=False, lw=0.7)
+#        plt.gca().add_artist(c)
+#    plt.xlim([-15,15])
+#    plt.ylim([-15,15])
+#    plt.xlabel('x (degree)')
+#    plt.ylabel('y (degree)', labelpad=0)
+#    plt.gca().set_aspect('equal')
+
 def plot_rf_as_circles(rfs, smin, smax):
     cNorm  = colors.Normalize(vmin=smin, vmax=smax)
-    scalarMap = cmx.ScalarMappable(norm=cNorm, cmap=plt.get_cmap('cubehelix_r') )
-    print scalarMap.get_clim()
+    scalarMap = cmx.ScalarMappable(norm=cNorm, cmap=plt.get_cmap('jet') )
+    # print scalarMap.get_clim()
     for rf in rfs:
         colorVal = scalarMap.to_rgba(rf[2])
-        c = plt.Circle((rf[0], rf[1]), rf[2], color=colorVal, fill=False, lw=0.7)
+        c = plt.Circle((rf[0], rf[1]), rf[2], color=colorVal, fill=True, alpha=0.1, lw=1.)
         plt.gca().add_artist(c)
+        c = plt.Circle((rf[0], rf[1]), rf[2], color=colorVal, fill=False, alpha=0.5, lw=2.)
+        plt.gca().add_artist(c)
+        #plt.scatter([rf[0],], [rf[1],], color=colorVal, marker='o')
     plt.xlim([-15,15])
     plt.ylim([-15,15])
     plt.xlabel('x (degree)')
@@ -46,17 +63,20 @@ def plot_rf_as_circles(rfs, smin, smax):
     plt.gca().set_aspect('equal')
 
 
-def plot_pretty_compare(X, Y, threshold, xlim, ylim):
-    color1 = '#084990'
-    color2 = '#3989c1'
+def plot_pretty_compare(X, Y, threshold, xlim, ylim, cmap='Blues'):
+    color1 = '#1111ff'
+    color2 = '#ff4400'
+    cmap = cm.get_cmap(cmap)    
+    #color1 = cmap(0.8)
+    #color2 = cmap(0.8)
     x = X
     y = Y
     
     g = sns.JointGrid(x, y, size=8, xlim=xlim, ylim=ylim)
     # marg. plot
     mask = np.logical_or(X>threshold, Y>threshold) #np.where(Xt[1]>threshold)[0]
-    _=g.plot_joint(plt.hexbin, bins='log', gridsize=30, cmap='Blues', extent=xlim+ylim)
-    ax1=g.ax_marg_x.hist(x,log=True, color=color2, bins=30, range=xlim) #distplot(color=".5",kde=False) #hist_kws={'log':True}
+    _=g.plot_joint(plt.hexbin, bins='log', gridsize=30, cmap=cmap, extent=xlim+ylim)
+    ax1=g.ax_marg_x.hist(x,log=True, color=color1, bins=30, range=xlim) #distplot(color=".5",kde=False) #hist_kws={'log':True}
     ax2=g.ax_marg_y.hist(y,log=True, color=color2, bins=30, orientation='horizontal', range=ylim)
     
     #adv = np.sum(ax1[0]) / (np.sum(ax1[0])+np.sum(ax2[0]))

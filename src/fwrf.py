@@ -203,7 +203,7 @@ def set_shared_parameters(shared_vars, values=None):
             var.set_value(val.reshape(var.get_value(borrow=True, return_internal_type=True).shape))    
     else: #clear vram
         for var in shared_vars:
-            var.set_value(np.asarray([], dtype=fpX).reshape((0,)*len(var.get_value(borrow=True, return_internal_type=True).shape)))
+            var.set_value(np.asarray([0,], dtype=fpX).reshape((1,)*len(var.get_value(borrow=True, return_internal_type=True).shape)))
 
 ########################################################################
 ###              SPECIAL LASAGNE LAYER AND MODEL                     ###
@@ -293,28 +293,30 @@ def normalize_mst_data(__mst_data, avg, std):
     return (__mst_data - _sAvg) / _sStd, [_sAvg, _sStd]
 
 
-def pvFWRF(__mst_data, nf, nv, nt): 
+def pvFWRF(__mst_data, nf, nv, nt, add_bias=True): 
     '''
     Create a symbolic lasagne network for the per voxel candidate case.
     returns a symbolic outpuy of shape (bn, bv, bt).
     '''
     _input = L.InputLayer((None, nf, nv, nt), input_var=__mst_data.reshape((-1,nf,nv,nt)))
     ## try to add a parametrized local nonlinearity layer.
-    _pred  = pvFWRFLayer(_input, W=I.Normal(0.02), b=I.Constant(0.), nonlinearity=None)
-    #print "> input using approx %.1f x batch_size Mb of memory (VRAM and RAM)" % (fpX(4*nf*nv*nt) /(1024*1024))
-    #print "> output using approx %.3f x batch_size Mb of memory (VRAM and RAM)" % (fpX(4*nv*nt) /(1024*1024))
+    if add_bias:
+        _pred  = pvFWRFLayer(_input, W=I.Normal(0.02), b=I.Constant(0.), nonlinearity=None)
+    else:
+        _pred  = pvFWRFLayer(_input, W=I.Normal(0.02), b=None, nonlinearity=None)
     return _pred
 
 
-def svFWRF(__mst_data, nf, nv, nt): 
+def svFWRF(__mst_data, nf, nv, nt, add_bias=True): 
     '''
     Create a symbolic lasagne network for the shared voxel candidate case.
     returns a symbolic outpuy of shape (bn, bv, bt).
     '''
     _input = L.InputLayer((None, nf, nt), input_var=__mst_data.reshape((-1,nf,nt)))
-    _pred  = svFWRFLayer(_input, nvoxels=nv, W=I.Normal(0.02), b=I.Constant(0.), nonlinearity=None) #NL.tanh
-    #print "> input using approx %.1f x batch_size Mb of memory (VRAM and RAM)" % (fpX(4*nf*nv*nt) /(1024*1024))
-    #print "> output using approx %.3f x batch_size Mb of memory (VRAM and RAM)" % (fpX(4*nv*nt) /(1024*1024))
+    if add_bias:
+        _pred  = svFWRFLayer(_input, nvoxels=nv, W=I.Normal(0.02), b=I.Constant(0.), nonlinearity=None)
+    else:
+        _pred  = svFWRFLayer(_input, nvoxels=nv, W=I.Normal(0.02), b=None, nonlinearity=None)
     return _pred
 
 
@@ -362,7 +364,7 @@ def model_space_tensor(
             fmap_sizes += [d.shape,]
     else:
         _fmaps = _symbolicFeatureMaps
-        fmap_sizes = featureMapsSizes
+        fmap_sizes = featureMapSizes
         assert fmap_sizes is not None
 
     if _symbolicInputVars is None:
@@ -442,7 +444,7 @@ def model_space_tensor(
 
 def learn_params(
         mst_data, voxels, w_params, \
-        batches=(1,1,1), val_test_size=100, lr=1e-4, l2=0.0, num_epochs=1, output_val_scores=-1, output_val_every=1, verbose=False, dry_run=False):
+        batches=(1,1,1), holdout_size=100, lr=1e-4, l2=0.0, num_epochs=1, output_val_scores=-1, output_val_every=1, verbose=False, dry_run=False):
     ''' 
         batches dims are (samples, voxels, candidates)
     '''
@@ -455,7 +457,7 @@ def learn_params(
     assert rbt==0, "the model batch size must be an divisor of the total number of models"
     if verbose:
         print "Grad. Desc. planned in %d batch with batch size %d and residual %d" % \
-            (int(np.ceil(float(n-val_test_size) / bn)), bn, (n-val_test_size)%bn)
+            (int(np.ceil(float(n-holdout_size) / bn)), bn, (n-holdout_size)%bn)
         print "%d voxel batches of size %d with residual %d" % (nbv, bv, rbv)
         print "%d candidate batches of size %d with residual %d" % (nbt, bt, rbt)
         print "for %d voxelmodel fits." % (nv*nt)
@@ -471,7 +473,7 @@ def learn_params(
     __vox_sdata = theano.shared(np.zeros(shape=(n, bv), dtype=fpX))
     __range = T.ivector()
     _smst_batch = __mst_sdata[__range[0]:__range[1]]
-    _fwrf_o = svFWRF(_smst_batch, nf, bv, bt)
+    _fwrf_o = svFWRF(_smst_batch, nf, bv, bt, add_bias=len(w_params)==2)
     if verbose:
         plu.print_lasagne_network(_fwrf_o, skipnoparam=False)
     ### define and compile the training expressions.       
@@ -524,10 +526,6 @@ def learn_params(
     if dry_run:
         # free vram
         set_shared_parameters([__mst_sdata, __vox_sdata,] + fwrf_o_params)
-#        __mst_sdata.set_value(np.asarray([], dtype=fpX).reshape((0,0,0,0)))
-#        __vox_sdata.set_value(np.asarray([], dtype=fpX).reshape((0,0)))
-#        W.set_value(np.asarray([], dtype=fpX).reshape((0,)*len(W.get_value().shape)))
-#        b.set_value(np.asarray([], dtype=fpX).reshape((0,)*len(b.get_value().shape)))
         return val_scores, best_scores, best_epochs, best_models, best_w_params
     ### VOXEL LOOP
     for v, (rv, lv) in tqdm(enumerate(iterate_range(0, nv, bv))):
@@ -565,11 +563,11 @@ def learn_params(
                 ######## ONE EPOCH OF TRAINING ###########
                 val_batch_scores.fill(0)  
                 # In each epoch, we do a full pass over the training data:
-                for rb, lb in iterate_bounds(0, n-val_test_size, bn):
+                for rb, lb in iterate_bounds(0, n-holdout_size, bn):
                     fwrf_o_trn_fn(rb)
                 # and one pass over the validation set.  
                 val_batches = 0
-                for rb, lb in iterate_bounds(n-val_test_size, val_test_size, bn): 
+                for rb, lb in iterate_bounds(n-holdout_size, holdout_size, bn): 
                     loss = fwrf_o_val_fn(rb)
                     val_batch_scores += loss
                     val_batches += lb
@@ -615,11 +613,6 @@ def learn_params(
     # end voxel loop 
     # free shared vram
     set_shared_parameters([__mst_sdata, __vox_sdata,] + fwrf_o_params)
-    #__mst_sdata.set_value(np.asarray([], dtype=fpX).reshape((0,0,0,0)))
-    #__vox_sdata.set_value(np.asarray([], dtype=fpX).reshape((0,0)))
-    #W.set_value(np.asarray([], dtype=fpX).reshape((0,)*len(W.get_value().shape)))
-    #b.set_value(np.asarray([], dtype=fpX).reshape((0,)*len(b.get_value().shape)))
-
     full_time = time.time() - start_time
     print "\n---------------------------------------------------------------------"
     print "%d Epoch for %d voxelmodels took %.3fs @ %.3f voxelmodels/s" % (num_epochs, nv*nt, full_time, fpX(nv*nt)/full_time)
@@ -656,7 +649,7 @@ def get_prediction(mst_data, voxels, mst_rel_models, w_params, batches=(1,1)):
     _V  = T.matrix()
     __V = _V.dimshuffle((0,1,'x'))
     _mst_data = T.tensor4()
-    _fwrf_t = pvFWRF(_mst_data, nf, bv, 1)   
+    _fwrf_t = pvFWRF(_mst_data, nf, bv, 1, add_bias=len(w_params)==2)   
     fwrf_t_params = L.get_all_params(_fwrf_t, trainable=True)
         
     _fwrf_t_val_pred = L.get_output(_fwrf_t, deterministic=True)   
@@ -756,17 +749,17 @@ def get_symbolic_prediction(_symbolicFeatureMaps, featureMapSizes, rf_params, w_
     shared_var['fpf_weight'] = _smsts
     if avg is not None:
         if nonlinearity is not None:
-            _nmst, _stats = normalize_mst_data(nonlinearity(mst_data(_symbolicFeatureMaps, _smsts)), avg, std)
-            _fwrf = pvFWRF(_nmst, nf, nv, 1)
+            _nmst, _stats = normalize_mst_data(nonlinearity(get_mst_data(_symbolicFeatureMaps, _smsts)), avg, std)
+            _fwrf = pvFWRF(_nmst, nf, nv, 1, add_bias=len(w_params)==2)
         else:
-            _nmst, _stats = normalize_mst_data(mst_data(_symbolicFeatureMaps, _smsts), avg, std)
-            _fwrf = pvFWRF(_nmst, nf, nv, 1)
+            _nmst, _stats = normalize_mst_data(get_mst_data(_symbolicFeatureMaps, _smsts), avg, std)
+            _fwrf = pvFWRF(_nmst, nf, nv, 1, add_bias=len(w_params)==2)
         shared_var['mst_norm'] = _stats
     else:
         if nonlinearity is not None:
-            _fwrf = pvFWRF(nonlinearity(mst_data(_symbolicFeatureMaps, _smsts)), nf, nv, 1)
+            _fwrf = pvFWRF(nonlinearity(get_mst_data(_symbolicFeatureMaps, _smsts)), nf, nv, 1, add_bias=len(w_params)==2)
         else:
-            _fwrf = pvFWRF(mst_data(_symbolicFeatureMaps, _smsts), nf, nv, 1)            
+            _fwrf = pvFWRF(get_mst_data(_symbolicFeatureMaps, _smsts), nf, nv, 1, add_bias=len(w_params)==2)            
     plu.print_lasagne_network(_fwrf, skipnoparam=False)
         
     fwrf_params = L.get_all_params(_fwrf, trainable=True)

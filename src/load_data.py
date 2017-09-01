@@ -14,7 +14,7 @@ def load_stimuli(path, load_hirez=True, npx=500, npc=1):
     data_size = trn_size + val_size
     print "trn: %d, val: %d" % (trn_size, val_size)   
     if load_hirez is not True:
-        return stimuli_lowrez, trn_size
+        return np.concatenate([stimuli_lowrez["stimTrn"], stimuli_lowrez["stimVal"]], axis=0), trn_size
     ###
     train_stim_files = glob(path+"Stimuli_Trn_FullRes*.mat")
     val_stim_file = path+"Stimuli_Val_FullRes.mat"
@@ -58,7 +58,7 @@ def load_stimuli(path, load_hirez=True, npx=500, npc=1):
 
     stimuli_hirez = np.transpose(stimuli_hirez / 255, (0,3,1,2))
     print "Data shape = %s" % (stimuli_hirez.shape,)
-    return stimuli_lowrez, stimuli_hirez, trn_size
+    return np.concatenate([stimuli_lowrez["stimTrn"], stimuli_lowrez["stimVal"]], axis=0), stimuli_hirez, trn_size
 
 
 
@@ -81,4 +81,4 @@ def load_voxels(path, subject, voxel_subset=None):
     if voxel_subset is not None:
         voxel_data = voxel_data[:, voxel_subset]
 
-    return voxel_data, voxelroi, voxelidx
+    return voxel_data, voxelROI, voxelIDX
