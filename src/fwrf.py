@@ -814,7 +814,7 @@ def kout_learn_params(mst_data, voxels, val_sample_order, w_params, batches=(1,1
         ### fit this part ###
         val_scores, best_scores, best_epochs, best_candidates, best_w_params = learn_params(\
             trn_mst_data, trn_voxel_data, w_params, batches=batches,\
-            val_test_size=holdout_size, lr=lr, l2=l2, num_epochs=num_epochs, output_val_scores=-1, output_val_every=1, verbose=verbose, dry_run=dry_run)
+            holdout_size=holdout_size, lr=lr, l2=l2, num_epochs=num_epochs, output_val_scores=-1, output_val_every=1, verbose=verbose, dry_run=dry_run)
         val_pred, val_cc = get_prediction(val_mst_data, val_voxel_data, best_candidates, best_w_params, batches=(val_part_size, batches[1]))
 
         model[k] = {}
@@ -848,7 +848,7 @@ def kout_learn_params(mst_data, voxels, val_sample_order, w_params, batches=(1,1
             ### fit this part ###
             val_scores, best_scores, best_epochs, best_candidates, best_w_params = learn_params(\
                 trn_mst_data, trn_voxel_data, w_params, batches=batches,\
-                val_test_size=holdout_size, lr=lr, l2=l2, num_epochs=num_epochs, output_val_scores=0, output_val_every=10, verbose=verbose, dry_run=dry_run)
+                holdout_size=holdout_size, lr=lr, l2=l2, num_epochs=num_epochs, output_val_scores=0, output_val_every=10, verbose=verbose, dry_run=dry_run)
             val_pred, val_cc = get_prediction(val_mst_data, val_voxel_data, best_candidates, best_w_params, batches=(val_part_size, batches[1]))
 
             model[k] = {}
