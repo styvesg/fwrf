@@ -668,24 +668,15 @@ def get_prediction(mst_data, voxels, mst_rel_models, w_params, batches=(1,1)):
     for rv, lv in tqdm(iterate_range(0, nv, bv)):
         voxelSlice = voxels[:,rv]
         vm_slice = mst_rel_models[rv]
-
         voxel_params = [p[rv] for p in w_params]
-#        rW = w_params[0][rv,:]
-#        rb = w_params[1][rv]
-
         if lv<bv: #PATCH UP MISSING DATA FOR THE FIXED BATCH SIZE
             voxelSlice = np.concatenate((voxelSlice, np.zeros(shape=(n, bv-lv), dtype=fpX)), axis=1)
             vm_slice = np.concatenate((vm_slice, np.zeros(shape=(bv-lv), dtype=int)), axis=0)
-
             for i,p in enumerate(voxel_params):
                 voxel_params[i] = np.concatenate((p, np.zeros(shape=(bv-lv,)+p.shape[1:], dtype=fpX)), axis=0)
-#            rW = np.concatenate((rW, np.zeros(shape=(bv-lv, nf), dtype=fpX)), axis=0)
-#            rb = np.concatenate((rb, np.zeros(shape=(bv-lv), dtype=fpX)), axis=0)     
         for i,p in enumerate(voxel_params):
             if len(p.shape)==2:
                 voxel_params[i] = p.T
-#        pW = rW.T.reshape((nf,bv,1))
-#        pb = rb.reshape((1,bv,1))      
 
         pv_mst_data = mst_data[:, :, 0, vm_slice, np.newaxis]
         set_shared_parameters(fwrf_t_params, voxel_params)
